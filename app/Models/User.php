@@ -34,4 +34,9 @@ class User extends Authenticatable
     {
         return 'password_hash';
     }
+
+    public function getRememberTokenName(): string
+    {
+        return '';
+    }
 }
