@@ -33,6 +33,8 @@ class LoginController extends Controller
             'username' => $data['username'],
             'display_name' => $data['display_name'],
             'password_hash' => $data['password'],
+            'role' => 'admin',
+            'active' => true,
         ]);
 
         Auth::login($user);
@@ -47,6 +49,11 @@ class LoginController extends Controller
             'username' => ['required', 'string'],
             'password' => ['required', 'string'],
         ]);
+
+        $account = User::query()->where('username', $credentials['username'])->first();
+        if ($account && ! $account->active) {
+            return back()->withErrors(['username' => 'บัญชีนี้ถูกปิดการใช้งาน'])->onlyInput('username');
+        }
 
         if (! Auth::attempt([
             'username' => $credentials['username'],

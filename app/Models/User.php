@@ -17,6 +17,8 @@ class User extends Authenticatable
         'username',
         'password_hash',
         'display_name',
+        'role',
+        'active',
     ];
 
     protected $hidden = [
@@ -27,7 +29,13 @@ class User extends Authenticatable
     {
         return [
             'password_hash' => 'hashed',
+            'active' => 'boolean',
         ];
+    }
+
+    public function isAdmin(): bool
+    {
+        return $this->role === 'admin';
     }
 
     public function getAuthPasswordName(): string

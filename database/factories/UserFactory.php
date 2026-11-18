@@ -19,6 +19,8 @@ class UserFactory extends Factory
             'username' => fake()->unique()->userName(),
             'display_name' => fake()->name(),
             'password_hash' => static::$password ??= Hash::make('password'),
+            'role' => 'user',
+            'active' => true,
         ];
     }
 }

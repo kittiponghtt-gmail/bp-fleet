@@ -92,6 +92,8 @@ class FleetController extends Controller
 
     public function replace(Request $request, FleetDatabase $fleet): JsonResponse
     {
+        abort_unless($request->user()?->isAdmin(), 403, 'ทำรายการนี้ได้เฉพาะผู้ดูแลระบบ');
+
         $fleet->replace($request->input('data', []));
 
         return $this->saved($fleet);

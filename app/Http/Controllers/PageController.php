@@ -10,7 +10,11 @@ class PageController extends Controller
     {
         $path = base_path('BP_Fleet_Management_System_TH_EN.html');
         $html = file_get_contents($path);
-        $token = '<script>window.CSRF='.json_encode(csrf_token()).';</script>';
+        $account = auth()->user();
+        $token = '<script>window.CSRF='.json_encode(csrf_token()).';window.FLEET_USER='.json_encode([
+            'admin' => (bool) $account?->isAdmin(),
+            'name' => $account?->display_name ?? '',
+        ]).';</script>';
         $html = preg_replace('/<body>/', '<body>'.$token, $html, 1);
 
         return response($html)->header('Content-Type', 'text/html; charset=UTF-8');

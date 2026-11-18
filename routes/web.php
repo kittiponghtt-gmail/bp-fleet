@@ -12,15 +12,23 @@ Route::middleware('guest')->group(function () {
     Route::post('/setup', [LoginController::class, 'setup'])->middleware('throttle:5,1');
 });
 
-Route::middleware('auth')->group(function () {
+Route::middleware(['auth', 'active'])->group(function () {
     Route::get('/', [PageController::class, 'fleet']);
     Route::post('/logout', [LoginController::class, 'destroy']);
 
-    Route::get('/users', [UserController::class, 'index']);
-    Route::post('/users', [UserController::class, 'store']);
+    Route::get('/password', [UserController::class, 'passwordForm']);
+    Route::post('/password', [UserController::class, 'updatePassword']);
+
+    Route::middleware('admin')->group(function () {
+        Route::get('/users', [UserController::class, 'index']);
+        Route::post('/users', [UserController::class, 'store']);
+        Route::post('/users/{user}/password', [UserController::class, 'resetPassword']);
+        Route::post('/users/{user}/active', [UserController::class, 'setActive']);
+        Route::post('/users/{user}/role', [UserController::class, 'setRole']);
+        Route::post('/api/fleet/replace', [FleetController::class, 'replace']);
+    });
 
     Route::get('/api/fleet', [FleetController::class, 'show']);
-    Route::post('/api/fleet/replace', [FleetController::class, 'replace']);
 
     Route::post('/api/vehicles', [FleetController::class, 'saveVehicle']);
     Route::put('/api/vehicles/{vehicle}', [FleetController::class, 'saveVehicle'])->where('vehicle', '.*');
