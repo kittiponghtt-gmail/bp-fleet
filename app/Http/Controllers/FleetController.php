@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\ActivityLog;
 use App\Services\FleetDatabase;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -11,6 +12,11 @@ class FleetController extends Controller
     public function show(FleetDatabase $fleet): JsonResponse
     {
         return response()->json($fleet->snapshot());
+    }
+
+    public function activity(ActivityLog $activity): JsonResponse
+    {
+        return response()->json(['activity' => $activity->recent()]);
     }
 
     public function saveVehicle(Request $request, FleetDatabase $fleet, ?string $vehicle = null): JsonResponse

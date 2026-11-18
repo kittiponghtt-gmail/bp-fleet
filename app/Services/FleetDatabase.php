@@ -7,6 +7,66 @@ use Illuminate\Support\Str;
 
 class FleetDatabase
 {
+    public function __construct(private ActivityLog $activity) {}
+
+    private const VEHICLE_FIELDS = [
+        'id' => 'Vehicle ID',
+        'plate' => 'License plate',
+        'make' => 'Make / brand',
+        'model' => 'Model',
+        'year' => 'Year',
+        'vin' => 'Vehicle identification number (VIN)',
+        'type' => 'Vehicle type',
+        'driver' => 'Assigned driver',
+        'branch' => 'Branch / location',
+        'department' => 'Department / route',
+        'status' => 'Vehicle status',
+        'currentOdometer' => 'Current odometer (km)',
+        'odometerDate' => 'Odometer reading date',
+        'insuranceExpiry' => 'Insurance expiry',
+        'taxExpiry' => 'Road tax expiry',
+        'inspectionExpiry' => 'Inspection expiry',
+        'registrationExpiry' => 'Registration expiry',
+        'notes' => 'Notes',
+    ];
+
+    private const SERVICE_FIELDS = [
+        'vehicleId' => 'Vehicle',
+        'category' => 'Maintenance type',
+        'date' => 'Service date',
+        'odometer' => 'Odometer when serviced (km)',
+        'cost' => 'Actual cost (THB)',
+        'vendor' => 'Service provider / garage',
+        'downtimeDays' => 'Downtime (days)',
+        'receipt' => 'Receipt / invoice reference',
+        'description' => 'Work done / parts replaced',
+        'verified' => 'Verified',
+    ];
+
+    private const RULE_FIELDS = [
+        'category' => 'Service type name',
+        'kmInterval' => 'Mileage interval (km)',
+        'daysInterval' => 'Calendar interval (days)',
+        'alertKm' => 'Early warning (km)',
+        'alertDays' => 'Early warning (days)',
+        'active' => 'Active',
+    ];
+
+    private const ODOMETER_FIELDS = [
+        'vehicleId' => 'Vehicle',
+        'date' => 'Reading date',
+        'odometer' => 'Odometer (km)',
+        'notes' => 'Notes',
+    ];
+
+    private const DOWNTIME_FIELDS = [
+        'vehicleId' => 'Vehicle',
+        'reason' => 'Reason',
+        'start' => 'Unavailable from',
+        'end' => 'Available again',
+        'description' => 'Description',
+    ];
+
     public function snapshot(): array
     {
         $vehicles = DB::table('vehicles')->orderBy('id')->get()->map(fn ($row) => [
@@ -114,6 +174,14 @@ class FleetDatabase
         }
 
         DB::transaction(function () use ($data) {
+            $beforeCounts = [
+                'Vehicles' => DB::table('vehicles')->count(),
+                'Maintenance records' => DB::table('services')->count(),
+                'Reminder rules' => DB::table('rules')->count(),
+                'Mileage readings' => DB::table('odometer_logs')->count(),
+                'Downtime records' => DB::table('downtime')->count(),
+                'Data issues' => DB::table('issues')->count(),
+            ];
             DB::table('issues')->delete();
             DB::table('downtime')->delete();
             DB::table('odometer_logs')->delete();
@@ -203,6 +271,20 @@ class FleetDatabase
                 $values['metadata'] = json_encode($data['metadata'] ?? []);
             }
             DB::table('app_config')->updateOrInsert(['id' => 1], $values);
+
+            $afterCounts = [
+                'Vehicles' => count($data['vehicles']),
+                'Maintenance records' => count($data['services']),
+                'Reminder rules' => count($data['rules']),
+                'Mileage readings' => count($data['odometerLogs'] ?? []),
+                'Downtime records' => count($data['downtime'] ?? []),
+                'Data issues' => count($data['issues'] ?? []),
+            ];
+            $changes = [];
+            foreach ($beforeCounts as $label => $from) {
+                $changes[] = ['field' => $label, 'from' => (string) $from, 'to' => (string) $afterCounts[$label]];
+            }
+            $this->record('replaced', 'fleet', null, '', null, $changes);
         });
     }
 
@@ -270,6 +352,19 @@ class FleetDatabase
                     'source' => 'Vehicle profile',
                 ]);
             }
+
+            $this->record(
+                $existing ? 'updated' : 'created',
+                'vehicle',
+                $row['id'],
+                (string) $row['plate'],
+                null,
+                $this->activity->diff(
+                    $existing ? $this->vehicleBefore($existing) : [],
+                    $this->vehicleAfter($row),
+                    self::VEHICLE_FIELDS
+                )
+            );
         });
     }
 
@@ -285,7 +380,8 @@ class FleetDatabase
             abort(422, 'That vehicle does not exist.');
         }
 
-        if ($existingId && ! DB::table('services')->where('id', $existingId)->exists()) {
+        $previous = $existingId ? DB::table('services')->where('id', $existingId)->first() : null;
+        if ($existingId && ! $previous) {
             abort(404, 'Maintenance record not found.');
         }
 
@@ -306,7 +402,7 @@ class FleetDatabase
             'source' => $input['source'] ?? 'Manual',
         ];
 
-        DB::transaction(function () use ($existingId, $row, $vehicleId, $odometer, $date, $category) {
+        DB::transaction(function () use ($existingId, $row, $vehicleId, $odometer, $date, $category, $previous) {
             if ($existingId) {
                 DB::table('services')->where('id', $existingId)->update($row);
             } else {
@@ -332,6 +428,19 @@ class FleetDatabase
             }
 
             $this->syncLatest($vehicleId, $category);
+
+            $this->record(
+                $previous ? 'updated' : 'created',
+                'service',
+                $row['id'],
+                $vehicleId,
+                $category,
+                $this->activity->diff(
+                    $previous ? $this->serviceBefore($previous) : [],
+                    $this->serviceAfter($row),
+                    self::SERVICE_FIELDS
+                )
+            );
         });
     }
 
@@ -345,6 +454,14 @@ class FleetDatabase
         DB::transaction(function () use ($service) {
             DB::table('services')->where('id', $service->id)->delete();
             $this->syncLatest($service->vehicle_id, $service->category);
+            $this->record(
+                'deleted',
+                'service',
+                (string) $service->id,
+                (string) $service->vehicle_id,
+                (string) $service->category,
+                $this->activity->diff($this->serviceBefore($service), [], self::SERVICE_FIELDS)
+            );
         });
     }
 
@@ -361,7 +478,8 @@ class FleetDatabase
         if ($duplicate) {
             abort(422, 'That category already exists.');
         }
-        if ($existingId && ! DB::table('rules')->where('id', $existingId)->exists()) {
+        $previous = $existingId ? DB::table('rules')->where('id', $existingId)->first() : null;
+        if ($existingId && ! $previous) {
             abort(404, 'Rule not found.');
         }
 
@@ -374,19 +492,44 @@ class FleetDatabase
             'active' => array_key_exists('active', $input) ? (($input['active'] ?? true) ? 1 : 0) : 1,
         ];
 
+        $id = $existingId ?: (string) ($input['id'] ?? $this->newId('rule'));
         if ($existingId) {
             DB::table('rules')->where('id', $existingId)->update($row);
         } else {
-            DB::table('rules')->insert($row + ['id' => $input['id'] ?? $this->newId('rule')]);
+            DB::table('rules')->insert($row + ['id' => $id]);
         }
+
+        $this->record(
+            $previous ? 'updated' : 'created',
+            'rule',
+            $id,
+            '',
+            $category,
+            $this->activity->diff(
+                $previous ? $this->ruleBefore($previous) : [],
+                $this->ruleAfter($row),
+                self::RULE_FIELDS
+            )
+        );
     }
 
     public function setRuleActive(string $id, bool $active): void
     {
-        if (! DB::table('rules')->where('id', $id)->exists()) {
+        $rule = DB::table('rules')->where('id', $id)->first();
+        if (! $rule) {
             abort(404, 'Rule not found.');
         }
         DB::table('rules')->where('id', $id)->update(['active' => $active ? 1 : 0]);
+        $after = $this->ruleBefore($rule);
+        $after['active'] = $active ? 'Yes' : 'No';
+        $this->record(
+            'updated',
+            'rule',
+            $id,
+            '',
+            (string) $rule->category,
+            $this->activity->diff($this->ruleBefore($rule), $after, self::RULE_FIELDS)
+        );
     }
 
     public function saveOdometer(array $input): void
@@ -402,13 +545,15 @@ class FleetDatabase
             abort(422, 'That vehicle does not exist.');
         }
 
-        DB::transaction(function () use ($input, $vehicle, $vehicleId, $date, $odometer) {
+        $id = (string) ($input['id'] ?? $this->newId('odo'));
+        $notes = ($input['notes'] ?? '') !== '' ? $input['notes'] : null;
+        DB::transaction(function () use ($vehicle, $vehicleId, $date, $odometer, $id, $notes, $input) {
             DB::table('odometer_logs')->insert([
-                'id' => $input['id'] ?? $this->newId('odo'),
+                'id' => $id,
                 'vehicle_id' => $vehicleId,
                 'reading_date' => $date,
                 'odometer' => $odometer,
-                'notes' => ($input['notes'] ?? '') !== '' ? $input['notes'] : null,
+                'notes' => $notes,
                 'source' => $input['source'] ?? 'Manual',
             ]);
 
@@ -419,6 +564,13 @@ class FleetDatabase
                     'odometer_date' => $date,
                 ]);
             }
+
+            $this->record('created', 'odometer', $id, $vehicleId, null, $this->activity->diff([], [
+                'vehicleId' => $vehicleId,
+                'date' => $date,
+                'odometer' => $odometer,
+                'notes' => $notes,
+            ], self::ODOMETER_FIELDS));
         });
     }
 
@@ -432,17 +584,24 @@ class FleetDatabase
         DB::transaction(function () use ($log) {
             DB::table('odometer_logs')->where('id', $log->id)->delete();
             $remaining = DB::table('odometer_logs')->where('vehicle_id', $log->vehicle_id)->get();
-            if ($remaining->isEmpty()) {
-                return;
+            if ($remaining->isNotEmpty()) {
+                $latest = $remaining->sortBy([
+                    ['reading_date', 'desc'],
+                    ['odometer', 'desc'],
+                ])->first();
+                DB::table('vehicles')->where('id', $log->vehicle_id)->update([
+                    'current_odometer' => (int) $latest->odometer,
+                    'odometer_date' => $latest->reading_date,
+                ]);
             }
-            $latest = $remaining->sortBy([
-                ['reading_date', 'desc'],
-                ['odometer', 'desc'],
-            ])->first();
-            DB::table('vehicles')->where('id', $log->vehicle_id)->update([
-                'current_odometer' => (int) $latest->odometer,
-                'odometer_date' => $latest->reading_date,
-            ]);
+            $this->record(
+                'deleted',
+                'odometer',
+                (string) $log->id,
+                (string) $log->vehicle_id,
+                null,
+                $this->activity->diff($this->odometerBefore($log), [], self::ODOMETER_FIELDS)
+            );
         });
     }
 
@@ -471,36 +630,212 @@ class FleetDatabase
             abort(422, 'That period overlaps an existing downtime record.');
         }
 
+        $id = (string) ($input['id'] ?? $this->newId('down'));
+        $description = ($input['description'] ?? '') !== '' ? $input['description'] : null;
         DB::table('downtime')->insert([
-            'id' => $input['id'] ?? $this->newId('down'),
+            'id' => $id,
             'vehicle_id' => $vehicleId,
             'start_date' => $start,
             'end_date' => $end,
             'reason' => $reason,
-            'description' => ($input['description'] ?? '') !== '' ? $input['description'] : null,
+            'description' => $description,
         ]);
+        $this->record('created', 'downtime', $id, $vehicleId, $reason, $this->activity->diff([], [
+            'vehicleId' => $vehicleId,
+            'reason' => $reason,
+            'start' => $start,
+            'end' => $end,
+            'description' => $description,
+        ], self::DOWNTIME_FIELDS));
     }
 
     public function deleteDowntime(string $id): void
     {
-        if (! DB::table('downtime')->where('id', $id)->delete()) {
+        $row = DB::table('downtime')->where('id', $id)->first();
+        if (! $row) {
             abort(404, 'Downtime record not found.');
         }
+        DB::table('downtime')->where('id', $id)->delete();
+        $this->record(
+            'deleted',
+            'downtime',
+            (string) $row->id,
+            (string) $row->vehicle_id,
+            (string) $row->reason,
+            $this->activity->diff([
+                'vehicleId' => $row->vehicle_id,
+                'reason' => $row->reason,
+                'start' => $this->dateOrNull($row->start_date),
+                'end' => $this->dateOrNull($row->end_date),
+                'description' => $row->description,
+            ], [], self::DOWNTIME_FIELDS)
+        );
     }
 
     public function resolveIssue(int $id): void
     {
-        if (! DB::table('issues')->where('id', $id)->update(['resolved' => 1])) {
+        $issue = DB::table('issues')->where('id', $id)->first();
+        if (! $issue || (int) $issue->resolved === 1) {
             abort(404, 'Issue not found.');
         }
+        DB::table('issues')->where('id', $id)->update(['resolved' => 1]);
+        $changes = [
+            ['field' => 'Data issue', 'from' => (string) $issue->issue, 'to' => 'Resolved'],
+        ];
+        if ($issue->vehicle_id) {
+            array_unshift($changes, ['field' => 'Vehicle', 'from' => null, 'to' => $issue->vehicle_id]);
+        }
+        $this->record('resolved', 'issue', (string) $id, (string) $issue->issue, null, $changes);
     }
 
     public function setTrackingStart(?string $date): void
     {
+        $current = DB::table('app_config')->where('id', 1)->value('tracking_start');
+        $next = $this->dateOrNull($date);
         DB::table('app_config')->updateOrInsert(
             ['id' => 1],
-            ['tracking_start' => $this->dateOrNull($date)]
+            ['tracking_start' => $next]
         );
+        $this->record('updated', 'config', '1', '', null, $this->activity->diff(
+            ['tracking' => $this->dateOrNull($current)],
+            ['tracking' => $next],
+            ['tracking' => 'Tracking start']
+        ));
+    }
+
+    private function record(string $action, string $type, ?string $id, string $detail, ?string $category, array $changes): void
+    {
+        if ($action === 'updated' && $changes === []) {
+            return;
+        }
+
+        $this->activity->write($action, $type, $id, $detail, $category, $changes);
+    }
+
+    private function statusLabel(?string $status): ?string
+    {
+        return match ($status) {
+            'active' => 'Active',
+            'in_service' => 'In service',
+            'unavailable' => 'Unavailable',
+            'sold' => 'Sold / retired',
+            null, '' => null,
+            default => $status,
+        };
+    }
+
+    private function vehicleAfter(array $row): array
+    {
+        return [
+            'id' => $row['id'],
+            'plate' => $row['plate'] ?? '',
+            'make' => $row['make'] ?? '',
+            'model' => $row['model'] ?? '',
+            'year' => $row['year'] ?? null,
+            'vin' => $row['vin'] ?? '',
+            'type' => $row['type'] ?? '',
+            'driver' => $row['driver'] ?? '',
+            'branch' => $row['branch'] ?? '',
+            'department' => $row['department'] ?? '',
+            'status' => $this->statusLabel($row['status'] ?? null),
+            'currentOdometer' => $row['current_odometer'] ?? null,
+            'odometerDate' => $this->dateOrNull($row['odometer_date'] ?? null),
+            'insuranceExpiry' => $this->dateOrNull($row['insurance_expiry'] ?? null),
+            'taxExpiry' => $this->dateOrNull($row['tax_expiry'] ?? null),
+            'inspectionExpiry' => $this->dateOrNull($row['inspection_expiry'] ?? null),
+            'registrationExpiry' => $this->dateOrNull($row['registration_expiry'] ?? null),
+            'notes' => $row['notes'] ?? null,
+        ];
+    }
+
+    private function vehicleBefore(object $row): array
+    {
+        return $this->vehicleAfter([
+            'id' => $row->id,
+            'plate' => $row->plate,
+            'status' => $row->status,
+            'make' => $row->make,
+            'model' => $row->model,
+            'year' => $row->year === null ? null : (int) $row->year,
+            'vin' => $row->vin,
+            'type' => $row->type,
+            'driver' => $row->driver,
+            'branch' => $row->branch,
+            'department' => $row->department,
+            'insurance_expiry' => $row->insurance_expiry,
+            'tax_expiry' => $row->tax_expiry,
+            'registration_expiry' => $row->registration_expiry,
+            'inspection_expiry' => $row->inspection_expiry,
+            'current_odometer' => $row->current_odometer === null ? null : (int) $row->current_odometer,
+            'odometer_date' => $row->odometer_date,
+            'notes' => $row->notes,
+        ]);
+    }
+
+    private function serviceAfter(array $row): array
+    {
+        return [
+            'vehicleId' => (string) ($row['vehicle_id'] ?? ''),
+            'category' => (string) ($row['category'] ?? ''),
+            'date' => $this->dateOrNull($row['service_date'] ?? null),
+            'odometer' => $this->intOrNull($row['odometer'] ?? null),
+            'cost' => $this->decimalOrNull($row['cost'] ?? null),
+            'vendor' => (string) ($row['vendor'] ?? ''),
+            'description' => $row['description'] ?? null,
+            'receipt' => (string) ($row['receipt'] ?? ''),
+            'downtimeDays' => $this->intOrNull($row['downtime_days'] ?? 0) ?? 0,
+            'verified' => (int) ($row['verified'] ?? 0) === 1 ? 'Yes' : 'No',
+        ];
+    }
+
+    private function serviceBefore(object $row): array
+    {
+        return $this->serviceAfter([
+            'vehicle_id' => $row->vehicle_id,
+            'category' => $row->category,
+            'service_date' => $row->service_date,
+            'odometer' => $row->odometer,
+            'cost' => $row->cost,
+            'vendor' => $row->vendor,
+            'description' => $row->description,
+            'receipt' => $row->receipt,
+            'downtime_days' => $row->downtime_days,
+            'verified' => $row->verified,
+        ]);
+    }
+
+    private function ruleAfter(array $row): array
+    {
+        return [
+            'category' => (string) ($row['category'] ?? ''),
+            'kmInterval' => $this->intOrNull($row['km_interval'] ?? null),
+            'daysInterval' => $this->intOrNull($row['days_interval'] ?? null),
+            'alertKm' => $this->intOrNull($row['alert_km'] ?? 0) ?? 0,
+            'alertDays' => $this->intOrNull($row['alert_days'] ?? 0) ?? 0,
+            'active' => (int) ($row['active'] ?? 0) === 1 ? 'Yes' : 'No',
+        ];
+    }
+
+    private function ruleBefore(object $row): array
+    {
+        return $this->ruleAfter([
+            'category' => $row->category,
+            'km_interval' => $row->km_interval,
+            'days_interval' => $row->days_interval,
+            'alert_km' => $row->alert_km,
+            'alert_days' => $row->alert_days,
+            'active' => $row->active,
+        ]);
+    }
+
+    private function odometerBefore(object $row): array
+    {
+        return [
+            'vehicleId' => (string) $row->vehicle_id,
+            'date' => $this->dateOrNull($row->reading_date),
+            'odometer' => $this->intOrNull($row->odometer),
+            'notes' => $row->notes,
+        ];
     }
 
     private function syncLatest(string $vehicleId, string $category): void

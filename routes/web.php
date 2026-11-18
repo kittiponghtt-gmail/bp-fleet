@@ -29,6 +29,7 @@ Route::middleware(['auth', 'active'])->group(function () {
     });
 
     Route::get('/api/fleet', [FleetController::class, 'show']);
+    Route::get('/api/activity', [FleetController::class, 'activity']);
 
     Route::post('/api/vehicles', [FleetController::class, 'saveVehicle']);
     Route::put('/api/vehicles/{vehicle}', [FleetController::class, 'saveVehicle'])->where('vehicle', '.*');
