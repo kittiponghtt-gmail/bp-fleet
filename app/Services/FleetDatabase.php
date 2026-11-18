@@ -210,8 +210,8 @@ class FleetDatabase
     {
         $id = strtoupper(trim((string) ($input['id'] ?? '')));
         $plate = trim((string) ($input['plate'] ?? ''));
-        if ($id === '' || $plate === '') {
-            abort(422, 'Vehicle ID and plate are required.');
+        if ($id === '') {
+            abort(422, 'Vehicle ID is required.');
         }
 
         $existing = $existingId ? DB::table('vehicles')->where('id', $existingId)->first() : null;
