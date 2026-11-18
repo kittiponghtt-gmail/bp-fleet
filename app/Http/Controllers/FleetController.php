@@ -21,9 +21,9 @@ class FleetController extends Controller
 
     public function saveVehicle(Request $request, FleetDatabase $fleet, ?string $vehicle = null): JsonResponse
     {
-        $fleet->saveVehicle($request->all(), $vehicle);
+        $id = $fleet->saveVehicle($request->all(), $vehicle);
 
-        return $this->saved($fleet);
+        return response()->json(['fleet' => $fleet->snapshot(), 'vehicleId' => $id]);
     }
 
     public function saveService(Request $request, FleetDatabase $fleet, ?string $service = null): JsonResponse

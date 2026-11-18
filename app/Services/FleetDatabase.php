@@ -11,7 +11,7 @@ class FleetDatabase
     public function __construct(private ActivityLog $activity) {}
 
     private const VEHICLE_FIELDS = [
-        'id' => 'Vehicle ID',
+        'code' => 'Vehicle ID',
         'plate' => 'License plate',
         'make' => 'Make / brand',
         'model' => 'Model',
@@ -77,6 +77,7 @@ class FleetDatabase
     {
         $vehicles = DB::table('vehicles')->orderBy('id')->get()->map(fn ($row) => [
             'id' => $row->id,
+            'code' => $row->code ?: $row->id,
             'plate' => $row->plate,
             'status' => $row->status,
             'make' => $row->make,
@@ -213,6 +214,7 @@ class FleetDatabase
 
             $this->insertChunks('vehicles', array_map(fn (array $row) => [
                 'id' => $row['id'],
+                'code' => $row['code'] ?? $row['id'],
                 'plate' => $row['plate'] ?? '',
                 'status' => $row['status'] ?? 'active',
                 'make' => $row['make'] ?? '',
@@ -328,26 +330,31 @@ class FleetDatabase
         });
     }
 
-    public function saveVehicle(array $input, ?string $existingId): void
+    public function saveVehicle(array $input, ?string $existingId): string
     {
-        $id = strtoupper(trim((string) ($input['id'] ?? '')));
+        // `code` is only a label (editable, may repeat); `id` is the stable internal key.
+        $code = trim((string) ($input['code'] ?? ''));
         $plate = trim((string) ($input['plate'] ?? ''));
-        if ($id === '') {
+        if ($code === '') {
             abort(422, 'Vehicle ID is required.');
         }
 
         $existing = $existingId ? DB::table('vehicles')->where('id', $existingId)->first() : null;
-        if (! $existing && DB::table('vehicles')->where('id', $id)->exists()) {
-            abort(422, 'That vehicle ID already exists.');
+        if ($existingId && ! $existing) {
+            abort(404, 'That vehicle does not exist.');
         }
-        if ($existing && $existing->id !== $id && DB::table('vehicles')->where('id', $id)->exists()) {
-            abort(422, 'That vehicle ID already exists.');
+        $id = $existing ? $existing->id : $this->newId('veh');
+        $status = $input['status'] ?? 'active';
+        if ($plate !== '' && $status !== 'sold'
+            && DB::table('vehicles')->where('plate', $plate)->where('status', '!=', 'sold')->where('id', '!=', $id)->exists()) {
+            abort(422, 'That license plate is already used by another vehicle.');
         }
 
         $odometer = $this->intOrNull($input['currentOdometer'] ?? null);
         $odometerDate = $this->dateOrNull($input['odometerDate'] ?? null);
         $row = [
             'id' => $id,
+            'code' => $code,
             'plate' => $plate,
             'status' => $input['status'] ?? 'active',
             'make' => $input['make'] ?? '',
@@ -406,6 +413,8 @@ class FleetDatabase
                 )
             );
         });
+
+        return $id;
     }
 
     public function saveService(array $input, ?string $existingId): void
@@ -878,6 +887,7 @@ class FleetDatabase
     {
         return [
             'id' => $row['id'],
+            'code' => $row['code'] ?? $row['id'],
             'plate' => $row['plate'] ?? '',
             'make' => $row['make'] ?? '',
             'model' => $row['model'] ?? '',
@@ -902,6 +912,7 @@ class FleetDatabase
     {
         return $this->vehicleAfter([
             'id' => $row->id,
+            'code' => $row->code ?: $row->id,
             'plate' => $row->plate,
             'status' => $row->status,
             'make' => $row->make,
