@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 class FleetDatabase
@@ -59,6 +60,11 @@ class FleetDatabase
         'notes' => 'Notes',
     ];
 
+    private const GARAGE_FIELDS = [
+        'name' => 'Garage name',
+        'phone' => 'Garage phone',
+    ];
+
     private const DOWNTIME_FIELDS = [
         'vehicleId' => 'Vehicle',
         'reason' => 'Reason',
@@ -103,6 +109,7 @@ class FleetDatabase
             'odometer' => $row->odometer === null ? null : (int) $row->odometer,
             'cost' => $row->cost === null ? null : (float) $row->cost,
             'vendor' => $row->vendor,
+            'garageId' => isset($row->garage_id) ? $row->garage_id : null,
             'description' => $row->description,
             'receipt' => $row->receipt,
             'downtimeDays' => (int) $row->downtime_days,
@@ -147,6 +154,14 @@ class FleetDatabase
             'resolved' => (int) $row->resolved === 1,
         ])->all();
 
+        $garages = $this->garageTable()
+            ? DB::table('garages')->orderBy('name')->get()->map(fn ($row) => [
+                'id' => $row->id,
+                'name' => $row->name,
+                'phone' => $row->phone,
+            ])->all()
+            : [];
+
         $config = DB::table('app_config')->where('id', 1)->first();
         $metadata = [];
         if ($config && isset($config->metadata) && $config->metadata) {
@@ -160,6 +175,7 @@ class FleetDatabase
             'downtime' => $downtime,
             'issues' => $issues,
             'odometerLogs' => $logs,
+            'garages' => $garages,
             'metadata' => $metadata,
             'config' => ['trackingStart' => $config->tracking_start ?? null],
         ];
@@ -182,10 +198,16 @@ class FleetDatabase
                 'Downtime records' => DB::table('downtime')->count(),
                 'Data issues' => DB::table('issues')->count(),
             ];
+            if ($this->garageTable()) {
+                $beforeCounts['Garages'] = DB::table('garages')->count();
+            }
             DB::table('issues')->delete();
             DB::table('downtime')->delete();
             DB::table('odometer_logs')->delete();
             DB::table('services')->delete();
+            if ($this->garageTable()) {
+                DB::table('garages')->delete();
+            }
             DB::table('rules')->delete();
             DB::table('vehicles')->delete();
 
@@ -225,7 +247,15 @@ class FleetDatabase
                 'active' => ($row['active'] ?? true) ? 1 : 0,
             ], $data['rules']));
 
-            $this->insertChunks('services', array_map(fn (array $row) => [
+            if ($this->garageTable()) {
+                $this->insertChunks('garages', array_map(fn (array $row) => [
+                    'id' => $row['id'],
+                    'name' => $row['name'] ?? '',
+                    'phone' => $row['phone'] ?? '',
+                ], $data['garages'] ?? []));
+            }
+
+            $serviceRows = array_map(fn (array $row) => [
                 'id' => $row['id'],
                 'vehicle_id' => $row['vehicleId'],
                 'category' => $row['category'],
@@ -238,7 +268,14 @@ class FleetDatabase
                 'downtime_days' => $this->intOrNull($row['downtimeDays'] ?? 0) ?? 0,
                 'verified' => ($row['verified'] ?? true) ? 1 : 0,
                 'source' => $row['source'] ?? 'Manual',
-            ], $data['services']));
+            ], $data['services']);
+            if ($this->hasGarageColumn()) {
+                foreach ($data['services'] as $index => $row) {
+                    $garageId = trim((string) ($row['garageId'] ?? ''));
+                    $serviceRows[$index]['garage_id'] = $garageId !== '' ? $garageId : null;
+                }
+            }
+            $this->insertChunks('services', $serviceRows);
 
             $this->insertChunks('odometer_logs', array_map(fn (array $row) => [
                 'id' => $row['id'],
@@ -280,6 +317,9 @@ class FleetDatabase
                 'Downtime records' => count($data['downtime'] ?? []),
                 'Data issues' => count($data['issues'] ?? []),
             ];
+            if ($this->garageTable()) {
+                $afterCounts['Garages'] = count($data['garages'] ?? []);
+            }
             $changes = [];
             foreach ($beforeCounts as $label => $from) {
                 $changes[] = ['field' => $label, 'from' => (string) $from, 'to' => (string) $afterCounts[$label]];
@@ -387,6 +427,20 @@ class FleetDatabase
 
         $id = $existingId ?: (string) ($input['id'] ?? $this->newId('evt'));
         $odometer = $this->intOrNull($input['odometer'] ?? null);
+        $garageId = trim((string) ($input['garageId'] ?? ''));
+        $vendor = trim((string) ($input['vendor'] ?? ''));
+        if ($garageId !== '') {
+            if (! $this->hasGarageColumn()) {
+                abort(422, 'Garage list is not ready. Run the database update first.');
+            }
+            $garage = DB::table('garages')->where('id', $garageId)->first();
+            if (! $garage) {
+                abort(422, 'That garage does not exist.');
+            }
+            $vendor = $garage->name;
+        } elseif (array_key_exists('garageId', $input)) {
+            $vendor = '';
+        }
         $row = [
             'id' => $id,
             'vehicle_id' => $vehicleId,
@@ -394,13 +448,16 @@ class FleetDatabase
             'service_date' => $date,
             'odometer' => $odometer,
             'cost' => $this->decimalOrNull($input['cost'] ?? null),
-            'vendor' => $input['vendor'] ?? '',
+            'vendor' => $vendor,
             'description' => ($input['description'] ?? '') !== '' ? $input['description'] : null,
             'receipt' => $input['receipt'] ?? '',
             'downtime_days' => $this->intOrNull($input['downtimeDays'] ?? 0) ?? 0,
             'verified' => ($input['verified'] ?? true) ? 1 : 0,
             'source' => $input['source'] ?? 'Manual',
         ];
+        if ($this->hasGarageColumn()) {
+            $row['garage_id'] = $garageId !== '' ? $garageId : null;
+        }
 
         DB::transaction(function () use ($existingId, $row, $vehicleId, $odometer, $date, $category, $previous) {
             if ($existingId) {
@@ -461,6 +518,99 @@ class FleetDatabase
                 (string) $service->vehicle_id,
                 (string) $service->category,
                 $this->activity->diff($this->serviceBefore($service), [], self::SERVICE_FIELDS)
+            );
+        });
+    }
+
+    public function saveGarage(array $input, ?string $existingId): void
+    {
+        if (! $this->garageTable()) {
+            abort(422, 'Garage list is not ready. Run the database update first.');
+        }
+
+        $name = trim((string) ($input['name'] ?? ''));
+        $phone = trim((string) ($input['phone'] ?? ''));
+        if ($name === '') {
+            abort(422, 'Enter a garage name.');
+        }
+        if (mb_strlen($name) > 160) {
+            abort(422, 'Garage name is too long.');
+        }
+        if (mb_strlen($phone) > 40) {
+            abort(422, 'Phone number is too long.');
+        }
+
+        $previous = $existingId ? DB::table('garages')->where('id', $existingId)->first() : null;
+        if ($existingId && ! $previous) {
+            abort(404, 'Garage not found.');
+        }
+
+        $duplicate = DB::table('garages')
+            ->whereRaw('LOWER(name) = ?', [mb_strtolower($name)])
+            ->when($existingId, fn ($query) => $query->where('id', '!=', $existingId))
+            ->exists();
+        if ($duplicate) {
+            abort(422, 'That garage already exists.');
+        }
+
+        $id = $existingId ?: (string) ($input['id'] ?? $this->newId('gar'));
+        $row = ['id' => $id, 'name' => $name, 'phone' => $phone];
+
+        DB::transaction(function () use ($previous, $row) {
+            if ($previous) {
+                DB::table('garages')->where('id', $previous->id)->update([
+                    'name' => $row['name'],
+                    'phone' => $row['phone'],
+                ]);
+                if ($this->hasGarageColumn() && $previous->name !== $row['name']) {
+                    DB::table('services')->where('garage_id', $previous->id)->update(['vendor' => $row['name']]);
+                }
+            } else {
+                DB::table('garages')->insert($row);
+            }
+
+            $this->record(
+                $previous ? 'updated' : 'created',
+                'garage',
+                $row['id'],
+                $row['name'],
+                null,
+                $this->activity->diff(
+                    $previous ? ['name' => $previous->name, 'phone' => $previous->phone] : [],
+                    ['name' => $row['name'], 'phone' => $row['phone']],
+                    self::GARAGE_FIELDS
+                )
+            );
+        });
+    }
+
+    public function deleteGarage(string $id): void
+    {
+        if (! $this->garageTable()) {
+            abort(422, 'Garage list is not ready. Run the database update first.');
+        }
+
+        $garage = DB::table('garages')->where('id', $id)->first();
+        if (! $garage) {
+            abort(404, 'Garage not found.');
+        }
+        if ($this->hasGarageColumn() && DB::table('services')->where('garage_id', $id)->exists()) {
+            abort(422, 'This garage is used on maintenance records.');
+        }
+
+        DB::transaction(function () use ($garage) {
+            DB::table('garages')->where('id', $garage->id)->delete();
+            $this->record(
+                'deleted',
+                'garage',
+                (string) $garage->id,
+                (string) $garage->name,
+                null,
+                $this->activity->diff(
+                    ['name' => $garage->name, 'phone' => $garage->phone],
+                    [],
+                    self::GARAGE_FIELDS
+                )
             );
         });
     }
@@ -877,6 +1027,16 @@ class FleetDatabase
     private function hasMetadataColumn(): bool
     {
         return DB::getSchemaBuilder()->hasColumn('app_config', 'metadata');
+    }
+
+    private function garageTable(): bool
+    {
+        return Schema::hasTable('garages');
+    }
+
+    private function hasGarageColumn(): bool
+    {
+        return Schema::hasTable('services') && Schema::hasColumn('services', 'garage_id');
     }
 
     private function newId(string $prefix): string

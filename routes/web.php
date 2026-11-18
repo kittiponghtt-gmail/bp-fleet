@@ -38,6 +38,10 @@ Route::middleware(['auth', 'active'])->group(function () {
     Route::put('/api/services/{service}', [FleetController::class, 'saveService']);
     Route::delete('/api/services/{service}', [FleetController::class, 'deleteService']);
 
+    Route::post('/api/garages', [FleetController::class, 'saveGarage']);
+    Route::put('/api/garages/{garage}', [FleetController::class, 'saveGarage']);
+    Route::delete('/api/garages/{garage}', [FleetController::class, 'deleteGarage']);
+
     Route::post('/api/rules', [FleetController::class, 'saveRule']);
     Route::put('/api/rules/{rule}', [FleetController::class, 'saveRule']);
     Route::patch('/api/rules/{rule}', [FleetController::class, 'setRuleActive']);

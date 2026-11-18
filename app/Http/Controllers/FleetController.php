@@ -40,6 +40,20 @@ class FleetController extends Controller
         return $this->saved($fleet);
     }
 
+    public function saveGarage(Request $request, FleetDatabase $fleet, ?string $garage = null): JsonResponse
+    {
+        $fleet->saveGarage($request->all(), $garage);
+
+        return $this->saved($fleet);
+    }
+
+    public function deleteGarage(FleetDatabase $fleet, string $garage): JsonResponse
+    {
+        $fleet->deleteGarage($garage);
+
+        return $this->saved($fleet);
+    }
+
     public function saveRule(Request $request, FleetDatabase $fleet, ?string $rule = null): JsonResponse
     {
         $fleet->saveRule($request->all(), $rule);
