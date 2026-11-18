@@ -5,30 +5,31 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ผู้ใช้งาน · BP Fleet</title>
 <style>
-body{margin:0;background:#11272d;color:#e7f2f1;font-family:Segoe UI,Tahoma,sans-serif}
-main{max-width:980px;margin:0 auto;padding:28px 16px 48px}
-a{color:#8ee0d2}
-h1{margin:0 0 16px}
-form.panel,table{background:#18383f;border:1px solid #2d5c63;border-radius:16px}
-form.panel{padding:18px;display:grid;gap:10px;margin-bottom:18px}
-label{font-size:14px}
-input{border:1px solid #2d5c63;background:#0f2429;color:#fff;border-radius:10px;padding:10px}
-button{border:0;border-radius:10px;padding:10px 12px;background:#2f9e8f;color:#fff;font-weight:700;cursor:pointer}
-button.muted{background:#3d555b}
-button.warn{background:#8a4a44}
+body{margin:0;background:#f4f7f8;color:#17343a;font-family:"Noto Sans Thai","Segoe UI",Tahoma,sans-serif}
+header{display:flex;align-items:center;gap:14px;background:#11272d;color:#e6f2ee;padding:16px 22px}
+header a{color:#b9f9e6;text-decoration:none;font-weight:700}
+main{max-width:1080px;margin:0 auto;padding:28px 16px 48px}
+h1{margin:0;font-size:22px}
+form.panel,table{background:#fff;border:1px solid #e3ecea;border-radius:16px}
+form.panel{padding:18px;display:grid;gap:8px;margin-bottom:18px;box-shadow:0 8px 24px rgba(17,39,45,.04)}
+label{font-size:13px;font-weight:700}
+input{border:1px solid #d5e3e0;background:#fff;color:#17343a;border-radius:10px;padding:10px}
+button{border:0;border-radius:10px;padding:10px 12px;background:#0f8a6c;color:#fff;font-weight:700;cursor:pointer}
+button.muted{background:#5d7578}
+button.warn{background:#a85a54}
 table{width:100%;border-collapse:collapse;overflow:hidden}
-th,td{text-align:left;padding:12px 14px;border-bottom:1px solid #2d5c63;vertical-align:top}
+th,td{text-align:left;padding:12px 14px;border-bottom:1px solid #e6eeec;vertical-align:top}
+th{font-size:12px;color:#5d7578}
 .actions{display:grid;gap:8px}
 .actions form{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.error{color:#ffb4a8;font-size:13px}
-.status{color:#8ee0d2}
+.error{color:#a85a54;font-size:13px}
+.status{color:#0f8a6c}
 .off{opacity:.55}
 </style>
 </head>
 <body>
+<header><a href="/">← กลับไปหน้ารถ</a><h1>ผู้ใช้งาน</h1></header>
 <main>
-<p><a href="/">กลับไปหน้ารถ</a></p>
-<h1>ผู้ใช้งาน</h1>
 @if (session('status'))<p class="status">{{ session('status') }}</p>@endif
 @error('user')<p class="error">{{ $message }}</p>@enderror
 <form class="panel" method="post" action="/users">
